@@ -9,6 +9,7 @@ email = "first.last@example.org"
 username = "DOMAIN\\user"
 auth_type = "NTLM"                   # or "basic"
 verify_tls = true
+# max_wait = 3600                    # longest wait (s) accepted on throttling/connection errors
 # password = "..."
 
 [dovecot]

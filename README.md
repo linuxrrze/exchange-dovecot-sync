@@ -78,6 +78,11 @@ mail again; if the mail has a Message-ID it first checks whether the interrupted
 so no duplicate is created. If a mail still cannot be written it is counted as an error and
 retried on the next run; after three such mails in a row (Dovecot unreachable) the copy stops.
 
+**Exchange throttling:** if Exchange answers "server busy" (`ErrorServerBusy`), exsync waits as
+long as the server asks (a warning "Server requested back off …" is shown) and retries the same
+request; temporary connection errors are retried as well. A single wait longer than `max_wait`
+(`[ews]`, default 3600 s) aborts the run, which can then be resumed.
+
 For each folder exsync first fetches only the list of mails (1000 per request) and downloads the
 content only for missing mails.
 

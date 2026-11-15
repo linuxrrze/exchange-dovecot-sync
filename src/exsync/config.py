@@ -23,6 +23,7 @@ class EwsConfig:
     username: str  # e.g. DOMAIN\user
     auth_type: Literal["NTLM", "basic"] = "NTLM"
     verify_tls: bool = True
+    max_wait: int = 3600  # longest wait (s) accepted when the server is busy or unreachable
     password: str | None = field(default=None, repr=False)
 
     def get_password(self) -> str:

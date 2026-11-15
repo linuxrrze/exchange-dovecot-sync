@@ -302,3 +302,17 @@ def test_copy_gives_up_on_one_mail_then_aborts_if_dovecot_stays_down(tmp_path):
     with pytest.raises(imaplib.IMAP4.abort):
         fullcopy.run(mailbox(), reconnecting_writer(down), fullcopy.State(tmp_path / "t.db"))
     assert down.calls == 3 * 4 and down.appended == []
+
+
+def test_ews_connect_retries_on_throttling(monkeypatch):
+    import exchangelib
+    from exchangelib.protocol import FaultTolerance
+
+    from exsync import ews
+    from exsync.config import EwsConfig
+
+    seen = {}
+    monkeypatch.setattr(exchangelib, "Account", lambda **kw: seen.update(kw))
+    ews.connect(EwsConfig(server="ex.example.org", email="a@x", username="D\\u", max_wait=900), "pw")
+    policy = seen["config"].retry_policy
+    assert isinstance(policy, FaultTolerance) and policy.max_wait == 900 and not policy.fail_fast

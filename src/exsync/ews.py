@@ -47,13 +47,16 @@ def register_props() -> None:
 def connect(cfg: EwsConfig, password: str):
     register_props()
     from exchangelib import BASIC, DELEGATE, NTLM, Account, Configuration, Credentials
-    from exchangelib.protocol import BaseProtocol, NoVerifyHTTPAdapter
+    from exchangelib.protocol import BaseProtocol, FaultTolerance, NoVerifyHTTPAdapter
 
     if not cfg.verify_tls:
         BaseProtocol.HTTP_ADAPTER_CLS = NoVerifyHTTPAdapter
     kwargs: dict[str, Any] = {
         "credentials": Credentials(cfg.username, password),
         "auth_type": NTLM if cfg.auth_type == "NTLM" else BASIC,
+        # On throttling (ErrorServerBusy) and transient connection errors wait as long as the
+        # server asks (default 60 s) and retry, instead of failing on the first error
+        "retry_policy": FaultTolerance(max_wait=cfg.max_wait),
     }
     if cfg.server.startswith("http"):
         kwargs["service_endpoint"] = cfg.server

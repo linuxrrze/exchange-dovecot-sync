@@ -66,6 +66,7 @@ def main(argv: list[str] | None = None) -> int:
 
     args = p.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.WARNING)
+    # exchangelib announces each wait on throttling ("Server requested back off …") as a warning
     cfg = config.load(args.config)
 
     from exchangelib.errors import UnauthorizedError
@@ -164,6 +165,8 @@ def cmd_bench(cfg: config.Config, args) -> int:
 
 
 def cmd_copy(cfg: config.Config, args) -> int:
+    from exchangelib.errors import ErrorServerBusy, RateLimitError, TransportError
+
     if cfg.dovecot is None:
         print("copy requires a [dovecot] section in the configuration", file=sys.stderr)
         return 2
@@ -184,6 +187,12 @@ def cmd_copy(cfg: config.Config, args) -> int:
     except KeyboardInterrupt:
         print(f"\nInterrupted. {resume}", file=sys.stderr)
         return 130
+    except (ErrorServerBusy, RateLimitError, TransportError) as exc:
+        if args.verbose:
+            raise
+        print(f"\nAborted: Exchange did not answer within {cfg.ews.max_wait} s ({exc}). "
+              f"Try again later or raise ews.max_wait. {resume}", file=sys.stderr)
+        return 1
     except dovecot.CONNECTION_ERRORS as exc:
         if args.verbose:
             raise
