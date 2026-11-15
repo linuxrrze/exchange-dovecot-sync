@@ -140,7 +140,11 @@ def is_mail_item(item) -> bool:
 _KEYWORD_BAD = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
-def imap_flags(item) -> list[str]:
+# Dovecot rejects longer keywords ("Keyword length too long"), setting mail_max_keyword_length
+MAX_KEYWORD_LENGTH = 50
+
+
+def imap_flags(item, max_keyword_length: int = MAX_KEYWORD_LENGTH) -> list[str]:
     """Exchange state of a mail → IMAP flags and keywords."""
     flags = []
     if getattr(item, "is_read", False):
@@ -153,15 +157,15 @@ def imap_flags(item) -> list[str]:
     elif verb == VERB_FORWARD:
         flags.append("$Forwarded")
     for cat in getattr(item, "categories", None) or ():
-        kw = category_keyword(cat)
+        kw = category_keyword(cat, max_keyword_length)
         if kw and kw not in flags:
             flags.append(kw)
     return flags
 
 
-def category_keyword(category: str) -> str:
+def category_keyword(category: str, max_length: int = MAX_KEYWORD_LENGTH) -> str:
     """Outlook category → IMAP keyword (only ASCII atom characters allowed)."""
     ascii_ = (category.replace("ä", "ae").replace("ö", "oe").replace("ü", "ue").replace("ß", "ss")
               .replace("Ä", "Ae").replace("Ö", "Oe").replace("Ü", "Ue"))
     kw = _KEYWORD_BAD.sub("_", ascii_).strip("_")
-    return kw[:64]
+    return kw[:max_length].rstrip("_")

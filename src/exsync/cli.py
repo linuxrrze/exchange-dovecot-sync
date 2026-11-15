@@ -185,6 +185,7 @@ def cmd_copy(cfg: config.Config, args) -> int:
     print(f"State file: {state_path}", flush=True)
     progress = Progress(sys.stdout)
     writer.notify = progress.line
+    log_handler = _log_via(progress)
     stats = None
     resume = "Running the same command again resumes and only transfers missing mails."
     try:
@@ -207,6 +208,7 @@ def cmd_copy(cfg: config.Config, args) -> int:
               f"({exc or type(exc).__name__}). Check the Dovecot log. {resume}", file=sys.stderr)
         return 1
     finally:
+        logging.getLogger().removeHandler(log_handler)
         writer.close()
         state.close()
     print(stats.summary(dry_run=args.dry_run))
@@ -216,6 +218,27 @@ def cmd_copy(cfg: config.Config, args) -> int:
         for line in stats.failed:
             print(f"  {line}")
     return 1 if stats.errors else 0
+
+
+class _ProgressLogHandler(logging.Handler):
+    def __init__(self, progress: Progress):
+        super().__init__()
+        self.progress = progress
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.progress.line(f"  {record.levelname}: {record.getMessage()}")
+
+
+def _log_via(progress: Progress) -> logging.Handler:
+    """Log messages (e.g. exchangelib's "Server requested back off …") as separate lines
+    instead of appending them to the progress line on stderr. Returns the handler to remove."""
+    root = logging.getLogger()
+    for h in list(root.handlers):
+        if getattr(h, "stream", None) in (sys.stderr, sys.stdout):
+            root.removeHandler(h)
+    handler = _ProgressLogHandler(progress)
+    root.addHandler(handler)
+    return handler
 
 
 def _state_path(cfg: config.Config, args):

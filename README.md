@@ -94,6 +94,12 @@ uv run exsync failed            # list them (from the state file)
 uv run exsync failed --retry    # forget them, the next copy run tries them again
 ```
 
+**Flags:** read, flagged, answered/forwarded and Outlook categories (as IMAP keywords) are taken
+over. Categories are cut to 50 characters, Dovecot's default `mail_max_keyword_length`
+(`max_keyword_length` in `[dovecot]` if Dovecot is configured differently). If Dovecot still
+rejects the keywords, the mail is written without them. A mail Dovecot rejects entirely is
+counted as an error and tried again on the next run; the run continues.
+
 **Exchange throttling:** if Exchange answers "server busy" (`ErrorServerBusy`), exsync waits as
 long as the server asks (a warning "Server requested back off …" is shown) and retries the same
 request; temporary connection errors are retried as well. A single wait longer than `max_wait`

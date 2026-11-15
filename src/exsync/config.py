@@ -39,6 +39,7 @@ class DovecotConfig:
     verify_tls: bool = True
     master_user: str | None = None  # login as "<user>*<master_user>"
     archive_prefix: str = "Archiv"  # target folder for the archive mailbox
+    max_keyword_length: int = 50  # Dovecot mail_max_keyword_length; longer categories are cut
     lmtp_host: str | None = None  # for Sieve: deliver new inbox mails via LMTP
     lmtp_port: int = 24
     password: str | None = field(default=None, repr=False)  # of the user or the master user

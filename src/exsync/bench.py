@@ -105,5 +105,5 @@ def _copy(folder, n: int, writer, dest: str, page_size: int, res: BenchResult) -
         res.bytes += len(item.mime_content)
         if writer is not None:
             t1 = time.perf_counter()
-            writer.append(dest, item.mime_content, ews.imap_flags(item), item.datetime_received)
+            writer.append(dest, item.mime_content, ews.imap_flags(item, writer.cfg.max_keyword_length), item.datetime_received)
             res.imap_seconds += time.perf_counter() - t1

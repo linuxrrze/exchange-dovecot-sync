@@ -18,6 +18,7 @@ with the same Message-ID in the same folder are transferred only once.
 
 from __future__ import annotations
 
+import imaplib
 import os
 import sqlite3
 import time
@@ -225,9 +226,9 @@ def _copy_folder(account, mf, dest, writer, state, done, stats, dry_run, batch, 
                 stats.skipped += 1
                 dup += 1
             else:
+                flags = ews.imap_flags(item, writer.cfg.max_keyword_length)
                 try:
-                    added = writer.append(dest, mime, ews.imap_flags(item), item.datetime_received,
-                                          message_id=mid)
+                    added = _append(writer, dest, mime, flags, item.datetime_received, mid, progress)
                 except dovecot.CONNECTION_ERRORS as exc:
                     stats.errors += 1
                     stats.failure_streak += 1
@@ -235,6 +236,11 @@ def _copy_folder(account, mf, dest, writer, state, done, stats, dry_run, batch, 
                                   f"{dest}: {exc or type(exc).__name__}; will be retried on the next run")
                     if stats.failure_streak >= MAX_CONSECUTIVE_FAILURES:
                         raise
+                    continue
+                except imaplib.IMAP4.error as exc:  # rejected by the server (NO/BAD), e.g. too large
+                    stats.errors += 1
+                    progress.line(f"  Dovecot rejected {mid or src.id} ({len(mime) / 1e6:.1f} MB) in {dest}: "
+                                  f"{exc}; will be retried on the next run")
                     continue
                 stats.failure_streak = 0
                 if added:
@@ -254,6 +260,21 @@ def _copy_folder(account, mf, dest, writer, state, done, stats, dry_run, batch, 
             progress.update(f"{summary.rstrip()}  [{processed}/{len(todo)}, {size / 1e6:.1f} MB, "
                             f"{copied / secs if secs else 0:.1f} mails/s{eta(processed, len(todo), secs)}]")
     progress.line(f"{summary}  [{copied} copied, {size / 1e6:.1f} MB in {time.perf_counter() - t0:.0f} s]")
+
+
+def _append(writer, dest, mime, flags, msg_time, mid, progress) -> bool:
+    """APPEND; if Dovecot rejects it and keywords were set, try again with system flags only."""
+    try:
+        return writer.append(dest, mime, flags, msg_time, message_id=mid)
+    except dovecot.CONNECTION_ERRORS:
+        raise
+    except imaplib.IMAP4.error as exc:
+        system = [f for f in flags if f.startswith("\\")]
+        if system == list(flags):
+            raise
+        progress.line(f"  Dovecot rejected keywords {[f for f in flags if f not in system]} ({exc}); "
+                      f"writing {mid or 'the mail'} without them")
+        return writer.append(dest, mime, system, msg_time, message_id=mid)
 
 
 def _normalize_label(path: str) -> str:

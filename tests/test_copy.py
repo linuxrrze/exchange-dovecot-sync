@@ -423,3 +423,49 @@ def test_cli_failed_lists_and_retries(tmp_path, monkeypatch, capsys):
     assert cli.main(["-c", str(path), "failed", "--state", str(tmp_path / "state.db"), "--retry"]) == 0
     assert "Forgotten: 1" in capsys.readouterr().out
     assert fullcopy.State(tmp_path / "state.db").done_ids() == set()
+
+
+# ------------------------------------------------------------ Dovecot rejects an APPEND
+
+
+class RejectingImap(FakeImap):
+    """Like Dovecot: keywords > 50 characters are rejected; optionally reject given mails."""
+
+    def __init__(self, reject=()):
+        super().__init__()
+        self.reject = set(reject)
+
+    def append(self, folder, mime, flags=(), msg_time=None):
+        if any(len(f) > 50 for f in flags):
+            raise imaplib.IMAP4.error("append failed: [CANNOT] Keyword length too long")
+        if any(r in mime for r in self.reject):
+            raise imaplib.IMAP4.error("append failed: [LIMIT] Mail too large")
+        super().append(folder, mime, flags, msg_time)
+
+
+def test_long_category_is_cut_to_dovecot_limit(tmp_path):
+    imap, acc = RejectingImap(), mailbox()
+    acc.all_mails[0].categories = ["Projekt " + "x" * 80, "Kurz"]
+    stats = fullcopy.run(acc, writer(imap), fullcopy.State(tmp_path / "s.db"))
+    assert stats.copied == 9 and stats.errors == 0
+    flags = imap.appended[0][1]
+    assert "Kurz" in flags and all(len(f) <= 50 for f in flags)
+
+
+def test_rejected_keywords_fall_back_to_system_flags(tmp_path):
+    imap, acc = RejectingImap(), mailbox()
+    acc.all_mails[0].categories = ["Projekt " + "x" * 80]
+    w = writer(imap)
+    w.cfg.max_keyword_length = 200  # Dovecot configured more strictly than exsync
+    progress = fullcopy.Silent()
+    stats = fullcopy.run(acc, w, fullcopy.State(tmp_path / "s.db"), progress=progress)
+    assert stats.copied == 9 and stats.errors == 0
+    assert any("without them" in line for line in progress.lines)
+
+
+def test_rejected_mail_does_not_stop_the_run(tmp_path):
+    imap, acc = RejectingImap(reject=[b"Text 4"]), mailbox()
+    state = fullcopy.State(tmp_path / "s.db")
+    stats = fullcopy.run(acc, writer(imap), state)
+    assert stats.copied == 8 and stats.errors == 1
+    assert "ID4" not in state.done_ids()  # tried again on the next run

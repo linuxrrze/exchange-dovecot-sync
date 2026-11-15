@@ -19,6 +19,7 @@ imap_port = 993
 ssl = true
 # master_user = "exsync"             # login as "user*exsync" (Dovecot master user)
 archive_prefix = "Archiv"            # target folder for the archive mailbox
+# max_keyword_length = 50            # Dovecot's mail_max_keyword_length (Outlook categories → keywords)
 # password = "..."                   # of the user or the master user
 # For Sieve: deliver new inbox mails via LMTP (requires an lmtp inet_listener in Dovecot)
 # lmtp_host = "dovecot.example.org"
