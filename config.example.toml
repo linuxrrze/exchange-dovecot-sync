@@ -1,0 +1,24 @@
+# Kopieren nach config.toml (wird von git ignoriert).
+# Passwörter: Umgebungsvariablen EXSYNC_EWS_PASSWORD / EXSYNC_IMAP_PASSWORD haben Vorrang,
+# dann `password` in dieser Datei, sonst wird abgefragt.
+# Mit Passwörtern die Datei schützen: chmod 600 config.toml
+
+[ews]
+server = "exchange.example.org"      # Hostname oder vollständige EWS-URL
+email = "vorname.nachname@example.org"
+username = "DOMAENE\\benutzer"
+auth_type = "NTLM"                   # oder "basic"
+verify_tls = true
+# password = "..."
+
+[dovecot]
+user = "benutzer"                    # Postfach in Dovecot
+imap_host = "dovecot.example.org"
+imap_port = 993
+ssl = true
+# master_user = "exsync"             # Login als "benutzer*exsync" (Dovecot master_user)
+archive_prefix = "Archiv"
+# password = "..."                  # des Benutzers bzw. des Master-Users
+# Für Sieve: neue Posteingangs-Mails per LMTP zustellen (Dovecot-inet_listener für lmtp nötig)
+# lmtp_host = "dovecot.example.org"
+# lmtp_port = 24

@@ -1,0 +1,27 @@
+[project]
+name = "exsync"
+version = "0.1.0"
+description = "Einweg-Sync von Exchange-Postfächern (Haupt- und Archivpostfach) per EWS nach Dovecot"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "exchangelib>=5.4",
+    "imapclient>=3.0",
+]
+
+[project.scripts]
+exsync = "exsync.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.5"]
+
+[build-system]
+requires = ["uv_build>=0.12.15,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
