@@ -78,6 +78,22 @@ mail again; if the mail has a Message-ID it first checks whether the interrupted
 so no duplicate is created. If a mail still cannot be written it is counted as an error and
 retried on the next run; after three such mails in a row (Dovecot unreachable) the copy stops.
 
+**Mails Exchange cannot export** ("MIME content conversion failed", e.g. damaged items from old
+migrations or PST imports): exsync rebuilds the mail from its EWS properties — addresses, subject,
+date, Message-ID, body, attachments (inline images, attached mails) and, if Exchange still has
+them, the original headers such as `Received`. If single properties are unreadable as well, the
+mail is built without them. Rebuilt mails carry the header `X-Exsync-Reconstructed: yes; <reason>`
+and are listed during the run. Lost are details that only exist in the original MIME (exact
+structure, S/MIME signatures); IRM-protected mails stay unreadable.
+
+If even the rebuild fails, the mail is reported with date, sender and subject, recorded in the
+state file and skipped from then on; the summary lists all such mails. Later:
+
+```sh
+uv run exsync failed            # list them (from the state file)
+uv run exsync failed --retry    # forget them, the next copy run tries them again
+```
+
 **Exchange throttling:** if Exchange answers "server busy" (`ErrorServerBusy`), exsync waits as
 long as the server asks (a warning "Server requested back off …" is shown) and retries the same
 request; temporary connection errors are retried as well. A single wait longer than `max_wait`

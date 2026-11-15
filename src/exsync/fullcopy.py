@@ -8,6 +8,10 @@ For each folder only the list of ItemIds is fetched first (fast, 1000 per reques
 are only fetched if the target folder already contains mails; MIME content is only downloaded
 for mails that are still missing.
 
+If Exchange cannot export a mail as MIME ("MIME content conversion failed"), the mail is rebuilt
+from its EWS properties (see exsync.rebuild). If that fails as well, the mail is recorded in the
+state file as permanently failed (listed by `exsync failed`) and not tried again.
+
 Limitations: mails without a Message-ID are only recognised via the state file. Several mails
 with the same Message-ID in the same folder are transferred only once.
 """
@@ -18,10 +22,10 @@ import os
 import sqlite3
 import time
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from exsync import bench, dovecot, ews
+from exsync import bench, dovecot, ews, rebuild
 from exsync.progress import Progress, Silent, eta
 
 # datetime_received is not a "complex" field (returned directly by FindItem) and makes exchangelib
@@ -45,6 +49,9 @@ class State:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("CREATE TABLE IF NOT EXISTS done (item_id TEXT PRIMARY KEY, folder TEXT, "
                         "message_id TEXT, copied_at REAL)")
+        # mails that could neither be exported nor rebuilt (also in `done`, so not tried again)
+        self.db.execute("CREATE TABLE IF NOT EXISTS failed (item_id TEXT PRIMARY KEY, folder TEXT, "
+                        "info TEXT, reason TEXT, failed_at REAL)")
         self.db.commit()
 
     def done_ids(self) -> set[str]:
@@ -54,6 +61,23 @@ class State:
         self.db.execute("INSERT OR REPLACE INTO done VALUES (?, ?, ?, ?)",
                         (item_id, folder, message_id, time.time()))
         self.db.commit()  # immediately, so an interruption affects at most the current mail
+
+    def mark_failed(self, item_id: str, folder: str, info: str, reason: str) -> None:
+        self.db.execute("INSERT OR REPLACE INTO failed VALUES (?, ?, ?, ?, ?)",
+                        (item_id, folder, info, reason, time.time()))
+        self.mark(item_id, folder, None)
+
+    def failed(self) -> list[tuple[str, str, str, str]]:
+        """(item_id, folder, info, reason) of all permanently failed mails."""
+        return list(self.db.execute("SELECT item_id, folder, info, reason FROM failed ORDER BY failed_at"))
+
+    def forget_failed(self) -> int:
+        """Remove the failed mails from the state so that the next run tries them again."""
+        ids = [row[0] for row in self.db.execute("SELECT item_id FROM failed")]
+        self.db.executemany("DELETE FROM done WHERE item_id = ?", [(i,) for i in ids])
+        self.db.execute("DELETE FROM failed")
+        self.db.commit()
+        return len(ids)
 
     def close(self) -> None:
         self.db.close()
@@ -73,6 +97,8 @@ class CopyStats:
     copied: int = 0
     errors: int = 0
     no_mail: int = 0  # calendar items, contacts, tasks … in mail folders (not copied)
+    rebuilt: int = 0  # copied, but rebuilt from EWS properties (MIME export failed)
+    failed: list[str] = field(default_factory=list)  # neither exportable nor rebuildable
     bytes: int = 0
     seconds: float = 0.0
     failure_streak: int = 0
@@ -84,6 +110,10 @@ class CopyStats:
                 f"{verb}: {n}, errors: {self.errors}")
         if self.no_mail:
             line += f", not mails (skipped): {self.no_mail}"
+        if self.rebuilt:
+            line += f", rebuilt: {self.rebuilt}"
+        if self.failed:
+            line += f", could not be copied: {len(self.failed)}"
         if not dry_run and self.copied:
             line += f", {self.bytes / 1e6:.1f} MB in {self.seconds:.0f} s"
         return line
@@ -173,9 +203,23 @@ def _copy_folder(account, mf, dest, writer, state, done, stats, dry_run, batch, 
                 continue
             mime = None if isinstance(item, Exception) else getattr(item, "mime_content", None)
             if not mime:
-                stats.errors += 1
-                progress.line(f"  error for {src.id}: {item if isinstance(item, Exception) else 'empty'}")
-                continue
+                if isinstance(item, Exception) and not rebuild.is_conversion_error(item):
+                    stats.errors += 1  # e.g. item deleted meanwhile; tried again on the next run
+                    progress.line(f"  error for {src.id}: {item}")
+                    continue
+                reason = str(item) if isinstance(item, Exception) else "empty MIME content"
+                try:
+                    item, mime = rebuild.rebuild(account, src, reason)
+                except rebuild.RebuildError as exc:
+                    info = rebuild.describe(account, src)
+                    state.mark_failed(src.id, dest, info, f"{reason} / {exc}")
+                    done.add(src.id)
+                    stats.failed.append(f"{mf.label}: {info}")
+                    progress.line(f"  could not be copied (skipped from now on): {info}\n"
+                                  f"    {reason} / {exc}")
+                    continue
+                stats.rebuilt += 1
+                progress.line(f"  rebuilt from properties ({reason}): {rebuild.describe_item(item)}")
             mid = dovecot.normalize_message_id(getattr(item, "message_id", None))
             if mid and mid in present:  # same Message-ID already in the target folder
                 stats.skipped += 1

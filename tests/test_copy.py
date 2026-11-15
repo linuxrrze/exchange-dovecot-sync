@@ -21,9 +21,26 @@ def mail(n, message_id=True):
 
 
 class Account(SimpleNamespace):
+    no_mime: set = frozenset()  # ItemIds whose MIME export fails ("conversion failed")
+    unreadable: set = frozenset()  # … and whose properties cannot be read either
+    no_headers: set = frozenset()  # … whose internet headers cannot be read
+
     def fetch(self, ids, only_fields):
+        from exchangelib.errors import ErrorItemNotFound, ErrorMimeContentConversionFailed
+
         by_id = {m.id: m for m in self.all_mails}
-        return [by_id[i] for i, _ck in ids]
+        out = []
+        for i, _ck in ids:
+            if "mime_content" in only_fields and i in self.no_mime:
+                out.append(ErrorMimeContentConversionFailed("MIME content conversion failed."))
+            elif "subject" in only_fields and "mime_content" not in only_fields and i in self.no_headers \
+                    and "headers" in only_fields:
+                out.append(ErrorMimeContentConversionFailed("Content conversion failed."))
+            elif "datetime_sent" in only_fields and i in self.unreadable:  # all rebuild attempts
+                out.append(ErrorItemNotFound("The specified object was not found in the store."))
+            else:
+                out.append(by_id[i])
+        return out
 
 
 def mailbox(without_message_id=False):
@@ -316,3 +333,93 @@ def test_ews_connect_retries_on_throttling(monkeypatch):
     ews.connect(EwsConfig(server="ex.example.org", email="a@x", username="D\\u", max_wait=900), "pw")
     policy = seen["config"].retry_policy
     assert isinstance(policy, FaultTolerance) and policy.max_wait == 900 and not policy.fail_fast
+
+
+# ------------------------------------------------------------ MIME export fails: rebuild
+
+
+def test_rebuild_builds_mail_from_properties():
+    from email import message_from_bytes, policy
+
+    from exchangelib import HTMLBody, Mailbox, Message
+    from exchangelib.attachments import FileAttachment, ItemAttachment
+    from exchangelib.properties import MessageHeader
+
+    from exsync import rebuild
+
+    inner = Message(subject="Original", body="innen", sender=Mailbox(name="X", email_address="x@y"))
+    item = Message(
+        subject="Grüße", sender=Mailbox(name="Jörg Müller", email_address="joerg@x"),
+        to_recipients=[Mailbox(name="A, B", email_address="a@x"), Mailbox(name="Intern", email_address="/O=FAU")],
+        datetime_sent=datetime(2019, 3, 1, 12, tzinfo=UTC), message_id="<abc@x>",
+        body=HTMLBody('<p>Hallo <img src="cid:img1"></p>'),
+        headers=[MessageHeader(name="Received", value="from a by b"),
+                 MessageHeader(name="Content-Type", value="text/plain")],
+        attachments=[FileAttachment(name="bild.png", content=b"PNG", content_type="image/png",
+                                    is_inline=True, content_id="img1"),
+                     FileAttachment(name="doc.pdf", content=b"%PDF", content_type="application/pdf"),
+                     ItemAttachment(name="Fwd", item=inner)])
+    raw = rebuild.build_mime(item, "MIME content conversion failed.").as_bytes(policy=policy.SMTP)
+    msg = message_from_bytes(raw, policy=policy.default)
+    assert msg["Subject"] == "Grüße" and msg["Message-ID"] == "<abc@x>"
+    assert msg["From"] == "Jörg Müller <joerg@x>" and "Intern <unknown@invalid>" in msg["To"]
+    assert msg["Received"] == "from a by b" and msg["X-Exsync-Reconstructed"].startswith("yes")
+    assert msg["Content-Type"].startswith("multipart/mixed") and msg.get_all("Content-Type") == [msg["Content-Type"]]
+    parts = {p.get_content_type(): p for p in msg.walk()}
+    assert "cid:img1" in parts["text/html"].get_content()
+    assert parts["image/png"]["Content-ID"] == "<img1>" and parts["image/png"].get_content() == b"PNG"
+    assert parts["application/pdf"].get_filename() == "doc.pdf"
+    assert parts["message/rfc822"].get_content()["Subject"] == "Original"
+
+
+def test_copy_rebuilds_mail_when_mime_export_fails(tmp_path):
+    imap, acc = FakeImap(), mailbox()
+    acc.no_mime = {"ID2"}
+    acc.all_mails[1].body, acc.all_mails[1].subject = "Text 2", "Zwei"
+    stats = fullcopy.run(acc, writer(imap), fullcopy.State(tmp_path / "s.db"))
+    assert stats.copied == 9 and stats.rebuilt == 1 and stats.errors == 0 and not stats.failed
+    rebuilt = [m for m in imap.store["INBOX"] if b"X-Exsync-Reconstructed" in m]
+    assert len(rebuilt) == 1 and b"Message-ID: <m2@x>" in rebuilt[0] and b"Subject: Zwei" in rebuilt[0]
+
+
+def test_rebuild_does_without_unreadable_properties(tmp_path):
+    imap, acc = FakeImap(), mailbox()
+    acc.no_mime = acc.no_headers = {"ID1"}
+    stats = fullcopy.run(acc, writer(imap), fullcopy.State(tmp_path / "s.db"))
+    assert stats.rebuilt == 1 and stats.copied == 9
+    [m] = [m for m in imap.store["INBOX"] if b"X-Exsync-Reconstructed" in m]
+    assert b"(without headers)" in m
+
+
+def test_copy_skips_unrecoverable_mail_permanently(tmp_path):
+    imap, acc = FakeImap(), mailbox()
+    acc.no_mime = acc.unreadable = {"ID3"}
+    acc.all_mails[2].subject, acc.all_mails[2].sender = "Kaputt", SimpleNamespace(email_address="s@x")
+    state = fullcopy.State(tmp_path / "s.db")
+    stats = fullcopy.run(acc, writer(imap), state)
+    assert stats.copied == 8 and stats.errors == 0
+    assert stats.failed == ["Posteingang/Projekte: 2026-01-01 00:00 | s@x | Kaputt"]
+    assert "could not be copied: 1" in stats.summary()
+    [(item_id, folder, _info, reason)] = state.failed()
+    assert (item_id, folder) == ("ID3", "INBOX/Projekte") and "conversion failed" in reason
+
+    again = fullcopy.run(acc, writer(imap), state)  # not tried again
+    assert again.copied == 0 and again.failed == [] and again.skipped == 9
+
+    acc.no_mime = acc.unreadable = set()
+    assert state.forget_failed() == 1 and state.failed() == []
+    assert fullcopy.run(acc, writer(imap), state).copied == 1
+
+
+def test_cli_failed_lists_and_retries(tmp_path, monkeypatch, capsys):
+    from exsync import cli
+
+    state = fullcopy.State(tmp_path / "state.db")
+    state.mark_failed("ID9", "INBOX", "2019-01-01 10:00 | a@x | Kaputt", "MIME content conversion failed.")
+    state.close()
+    path = write_cfg(tmp_path)
+    assert cli.main(["-c", str(path), "failed", "--state", str(tmp_path / "state.db")]) == 0
+    assert "INBOX: 2019-01-01 10:00 | a@x | Kaputt" in capsys.readouterr().out
+    assert cli.main(["-c", str(path), "failed", "--state", str(tmp_path / "state.db"), "--retry"]) == 0
+    assert "Forgotten: 1" in capsys.readouterr().out
+    assert fullcopy.State(tmp_path / "state.db").done_ids() == set()

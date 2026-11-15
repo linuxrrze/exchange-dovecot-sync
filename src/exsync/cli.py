@@ -5,6 +5,7 @@
   exsync -c config.toml bench FOLDER -n 2000  measure EWS export (optionally --write to Dovecot)
   exsync -c config.toml bench FOLDER -r       … including subfolders, structure below --target
   exsync -c config.toml copy [--dry-run]      copy primary and archive mailbox completely (resumable)
+  exsync -c config.toml failed [--retry]      mails copy could not transfer (MIME export and rebuild failed)
   exsync -c config.toml sieve-test            deliver a test mail via LMTP and find its folder
 """
 
@@ -59,6 +60,11 @@ def main(argv: list[str] | None = None) -> int:
                    help="state file (default: ~/.local/state/exsync/<mailbox>.sqlite3)")
     c.add_argument("--batch", type=int, default=50, help="mails per EWS request")
 
+    fl = sub.add_parser("failed", help="list mails that copy could not transfer (skipped permanently)")
+    fl.add_argument("--state", default=None, help="state file (default as for copy)")
+    fl.add_argument("--retry", action="store_true",
+                    help="forget them, so that the next copy run tries them again")
+
     s = sub.add_parser("sieve-test", help="deliver a test mail via LMTP and check where it lands")
     s.add_argument("--subject", default="exsync Sieve test")
     s.add_argument("--sender", default="exsync-test@localhost")
@@ -79,6 +85,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_bench(cfg, args)
         if args.cmd == "copy":
             return cmd_copy(cfg, args)
+        if args.cmd == "failed":
+            return cmd_failed(cfg, args)
         return cmd_sieve_test(cfg, args)
     except UnauthorizedError as exc:
         if args.verbose:
@@ -170,8 +178,7 @@ def cmd_copy(cfg: config.Config, args) -> int:
     if cfg.dovecot is None:
         print("copy requires a [dovecot] section in the configuration", file=sys.stderr)
         return 2
-    state_path = args.state or fullcopy.default_state_path(cfg.ews.email, cfg.dovecot.user,
-                                                           cfg.dovecot.imap_host)
+    state_path = _state_path(cfg, args)
     account = ews.connect(cfg.ews, cfg.ews.get_password())
     writer = dovecot.ImapWriter(cfg.dovecot, cfg.dovecot.get_password())
     state = fullcopy.State(state_path)
@@ -203,7 +210,33 @@ def cmd_copy(cfg: config.Config, args) -> int:
         writer.close()
         state.close()
     print(stats.summary(dry_run=args.dry_run))
+    if stats.failed:
+        print("Could not be copied (MIME export and rebuild failed; not tried again, "
+              "see 'exsync failed'):")
+        for line in stats.failed:
+            print(f"  {line}")
     return 1 if stats.errors else 0
+
+
+def _state_path(cfg: config.Config, args):
+    return args.state or fullcopy.default_state_path(cfg.ews.email, cfg.dovecot.user, cfg.dovecot.imap_host)
+
+
+def cmd_failed(cfg: config.Config, args) -> int:
+    if cfg.dovecot is None:
+        print("failed requires a [dovecot] section in the configuration", file=sys.stderr)
+        return 2
+    state = fullcopy.State(_state_path(cfg, args))
+    try:
+        rows = state.failed()
+        for _item_id, folder, info, reason in rows:
+            print(f"{folder}: {info}\n    {reason}")
+        print(f"{len(rows)} mails could not be copied")
+        if args.retry and rows:
+            print(f"Forgotten: {state.forget_failed()}; the next copy run tries them again.")
+    finally:
+        state.close()
+    return 0
 
 
 def cmd_sieve_test(cfg: config.Config, args) -> int:
