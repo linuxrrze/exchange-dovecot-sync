@@ -1,7 +1,7 @@
-"""Schreiben nach Dovecot: IMAP APPEND (normaler Weg) und LMTP (neue Posteingangs-Mails mit Sieve).
+"""Writing to Dovecot: IMAP APPEND (regular path) and LMTP (new inbox mails with Sieve).
 
-Beides funktioniert auch, wenn Dovecot auf einem anderen Rechner läuft. Für LMTP über TCP
-braucht Dovecot einen `inet_listener` für lmtp, der nur für den Sync-Rechner erreichbar ist.
+Both also work if Dovecot runs on another host. LMTP over TCP requires an lmtp `inet_listener`
+in Dovecot that is reachable only from the sync host.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ log = logging.getLogger(__name__)
 
 
 def normalize_message_id(value) -> str | None:
-    """Message-ID vergleichbar machen: ohne Leerraum/Zeilenumbrüche, in spitzen Klammern."""
+    """Make a Message-ID comparable: no whitespace/line breaks, in angle brackets."""
     if not value:
         return None
     mid = "".join(str(value).split())
@@ -31,10 +31,10 @@ def normalize_message_id(value) -> str | None:
 
 
 def folder_name(source: str, parts: Sequence[str], delimiter: str, archive_prefix: str = "Archiv") -> str:
-    """Exchange-Ordnerpfad → Dovecot-Ordnername.
+    """Exchange folder path → Dovecot folder name.
 
-    Der Posteingang des Hauptpostfachs wird INBOX, das Archivpostfach kommt unter `archive_prefix`.
-    Trennzeichen im Ordnernamen selbst werden ersetzt, damit keine Zwischenebene entsteht.
+    The inbox of the primary mailbox becomes INBOX, the archive mailbox goes below `archive_prefix`.
+    Delimiters inside a folder name are replaced so that no extra hierarchy level is created.
     """
     clean = [p.replace(delimiter, "_") for p in parts]
     if source == "primary" and clean and clean[0].lower() in ("inbox", "posteingang"):
@@ -75,7 +75,7 @@ class ImapWriter:
         if name in self._known:
             return
         if not self.client.folder_exists(name):
-            # übergeordnete Ebenen anlegen
+            # create parent levels
             parts = name.split(self.delimiter)
             for i in range(1, len(parts) + 1):
                 sub = self.delimiter.join(parts[:i])
@@ -88,7 +88,7 @@ class ImapWriter:
         self.client.append(folder, mime, flags=tuple(flags), msg_time=msg_time)
 
     def message_ids(self, folder: str) -> set[str]:
-        """Normalisierte Message-IDs aller Mails eines Ordners (leer, wenn es ihn nicht gibt)."""
+        """Normalized Message-IDs of all mails in a folder (empty if it does not exist)."""
         if not self.client.folder_exists(folder):
             return set()
         info = self.client.select_folder(folder, readonly=True)
@@ -97,7 +97,7 @@ class ImapWriter:
         parser = BytesHeaderParser()
         ids = set()
         uids = self.client.search(["ALL"])
-        for i in range(0, len(uids), 1000):  # in Paketen, damit die Kommandozeile kurz bleibt
+        for i in range(0, len(uids), 1000):  # in chunks to keep the command line short
             chunk = uids[i:i + 1000]
             for data in self.client.fetch(chunk, [b"BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)]"]).values():
                 for key, value in data.items():
@@ -111,7 +111,7 @@ class ImapWriter:
         return {name for _flags, _delim, name in self.client.list_folders()}
 
     def find_message_id(self, message_id: str) -> list[str]:
-        """Ordner, in denen eine Mail mit dieser Message-ID liegt."""
+        """Folders containing a mail with this Message-ID."""
         hits = []
         for flags, _delim, name in self.client.list_folders():
             if b"\\Noselect" in flags or b"\\NonExistent" in flags:
@@ -125,14 +125,14 @@ class ImapWriter:
         try:
             self.client.logout()
         except (OSError, imaplib.IMAP4.error) as exc:
-            log.debug("Logout fehlgeschlagen: %s", exc)
+            log.debug("Logout failed: %s", exc)
 
 
 def lmtp_deliver(cfg: DovecotConfig, mime: bytes, sender: str = "", factory=smtplib.LMTP) -> None:
-    """Mail per LMTP an Dovecot zustellen; Sieve läuft dabei wie bei normaler Zustellung."""
+    """Deliver a mail to Dovecot via LMTP; Sieve runs as on regular delivery."""
     if not cfg.lmtp_host:
-        raise ValueError("Für LMTP muss dovecot.lmtp_host gesetzt sein")
+        raise ValueError("LMTP requires dovecot.lmtp_host to be set")
     with factory(cfg.lmtp_host, cfg.lmtp_port) as lmtp:
         refused = lmtp.sendmail(sender, [cfg.user], mime)
     if refused:
-        raise RuntimeError(f"LMTP hat die Zustellung abgelehnt: {refused}")
+        raise RuntimeError(f"LMTP rejected the delivery: {refused}")

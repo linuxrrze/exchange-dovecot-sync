@@ -1,1 +1,1 @@
-"""Einweg-Sync Exchange (EWS, Haupt- und Archivpostfach) → Dovecot."""
+"""One-way sync Exchange (EWS, primary and archive mailbox) → Dovecot."""

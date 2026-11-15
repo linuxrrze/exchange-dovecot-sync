@@ -1,7 +1,7 @@
-"""Konfiguration aus einer TOML-Datei.
+"""Configuration from a TOML file.
 
-Passwörter: Umgebungsvariable (EXSYNC_EWS_PASSWORD / EXSYNC_IMAP_PASSWORD) hat Vorrang, dann
-`password` in der Konfigurationsdatei, sonst wird interaktiv abgefragt.
+Passwords: the environment variable (EXSYNC_EWS_PASSWORD / EXSYNC_IMAP_PASSWORD) takes
+precedence, then `password` in the configuration file, otherwise an interactive prompt.
 """
 
 from __future__ import annotations
@@ -18,29 +18,29 @@ from typing import Literal
 
 @dataclass
 class EwsConfig:
-    server: str  # Hostname oder vollständige EWS-URL
-    email: str  # primäre SMTP-Adresse des Postfachs
-    username: str  # z.B. DOMÄNE\benutzer
+    server: str  # host name or full EWS URL
+    email: str  # primary SMTP address of the mailbox
+    username: str  # e.g. DOMAIN\user
     auth_type: Literal["NTLM", "basic"] = "NTLM"
     verify_tls: bool = True
     password: str | None = field(default=None, repr=False)
 
     def get_password(self) -> str:
-        return _secret("EXSYNC_EWS_PASSWORD", self.password, f"EWS-Passwort für {self.username}: ")
+        return _secret("EXSYNC_EWS_PASSWORD", self.password, f"EWS password for {self.username}: ")
 
 
 @dataclass
 class DovecotConfig:
-    user: str  # Dovecot-Benutzer, in dessen Postfach geschrieben wird
+    user: str  # Dovecot user whose mailbox is written to
     imap_host: str = "localhost"
     imap_port: int = 993
     ssl: bool = True
     verify_tls: bool = True
-    master_user: str | None = None  # Login als "<user>*<master_user>"
-    archive_prefix: str = "Archiv"  # Zielordner für das Archivpostfach
-    lmtp_host: str | None = None  # für Sieve: Zustellung neuer Posteingangs-Mails per LMTP
+    master_user: str | None = None  # login as "<user>*<master_user>"
+    archive_prefix: str = "Archiv"  # target folder for the archive mailbox
+    lmtp_host: str | None = None  # for Sieve: deliver new inbox mails via LMTP
     lmtp_port: int = 24
-    password: str | None = field(default=None, repr=False)  # des Benutzers bzw. Master-Users
+    password: str | None = field(default=None, repr=False)  # of the user or the master user
 
     @property
     def login(self) -> str:
@@ -48,7 +48,7 @@ class DovecotConfig:
 
     def get_password(self) -> str:
         who = self.master_user or self.user
-        return _secret("EXSYNC_IMAP_PASSWORD", self.password, f"IMAP-Passwort für {who}: ")
+        return _secret("EXSYNC_IMAP_PASSWORD", self.password, f"IMAP password for {who}: ")
 
 
 @dataclass
@@ -71,14 +71,14 @@ def load(path: str | Path) -> Config:
 
 
 def warn_if_readable(path: Path) -> bool:
-    """Warnt, wenn eine Datei mit Passwörtern für Gruppe oder andere lesbar ist."""
+    """Warn if a file containing passwords is readable by group or others."""
     try:
         mode = path.stat().st_mode
     except OSError:
         return False
     if mode & (stat.S_IRGRP | stat.S_IROTH):
-        print(f"Warnung: {path} enthält Passwörter und ist für andere lesbar. "
-              f"Abhilfe: chmod 600 {path}", file=sys.stderr)
+        print(f"Warning: {path} contains passwords and is readable by others. "
+              f"Fix: chmod 600 {path}", file=sys.stderr)
         return True
     return False
 

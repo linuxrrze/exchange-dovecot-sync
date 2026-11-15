@@ -1,24 +1,24 @@
-# Kopieren nach config.toml (wird von git ignoriert).
-# Passwörter: Umgebungsvariablen EXSYNC_EWS_PASSWORD / EXSYNC_IMAP_PASSWORD haben Vorrang,
-# dann `password` in dieser Datei, sonst wird abgefragt.
-# Mit Passwörtern die Datei schützen: chmod 600 config.toml
+# Copy to config.toml (ignored by git).
+# Passwords: the environment variables EXSYNC_EWS_PASSWORD / EXSYNC_IMAP_PASSWORD take precedence,
+# then `password` in this file, otherwise you are prompted.
+# If you store passwords here, protect the file: chmod 600 config.toml
 
 [ews]
-server = "exchange.example.org"      # Hostname oder vollständige EWS-URL
-email = "vorname.nachname@example.org"
-username = "DOMAENE\\benutzer"
-auth_type = "NTLM"                   # oder "basic"
+server = "exchange.example.org"      # host name or full EWS URL
+email = "first.last@example.org"
+username = "DOMAIN\\user"
+auth_type = "NTLM"                   # or "basic"
 verify_tls = true
 # password = "..."
 
 [dovecot]
-user = "benutzer"                    # Postfach in Dovecot
+user = "user"                        # mailbox in Dovecot
 imap_host = "dovecot.example.org"
 imap_port = 993
 ssl = true
-# master_user = "exsync"             # Login als "benutzer*exsync" (Dovecot master_user)
-archive_prefix = "Archiv"
-# password = "..."                  # des Benutzers bzw. des Master-Users
-# Für Sieve: neue Posteingangs-Mails per LMTP zustellen (Dovecot-inet_listener für lmtp nötig)
+# master_user = "exsync"             # login as "user*exsync" (Dovecot master user)
+archive_prefix = "Archiv"            # target folder for the archive mailbox
+# password = "..."                   # of the user or the master user
+# For Sieve: deliver new inbox mails via LMTP (requires an lmtp inet_listener in Dovecot)
 # lmtp_host = "dovecot.example.org"
 # lmtp_port = 24

@@ -57,7 +57,7 @@ def test_copy_everything_with_structure(tmp_path):
     imap = FakeImap()
     stats = fullcopy.run(mailbox(), writer(imap), fullcopy.State(tmp_path / "s.db"))
     assert stats.copied == 9 and stats.errors == 0 and stats.no_mail == 1
-    assert "keine Mails (ausgelassen): 1" in stats.summary()
+    assert "not mails (skipped): 1" in stats.summary()
     assert copied(imap) == [("Archiv/Posteingang/2019", 3), ("Gelöschte Elemente", 2),
                             ("INBOX", 2), ("INBOX/Projekte", 2)]
 
@@ -102,7 +102,7 @@ def test_exclude_no_archive_and_dry_run(tmp_path):
     stats = fullcopy.run(mailbox(), writer(imap), fullcopy.State(tmp_path / "s.db"),
                          include_archive=False, exclude=["Gelöschte Elemente"], dry_run=True)
     assert stats.folders == 2 and stats.found == 4 and imap.appended == []
-    assert "zu kopieren: 4" in stats.summary(dry_run=True)
+    assert "to copy: 4" in stats.summary(dry_run=True)
 
 
 def test_normalize_message_id():
@@ -154,7 +154,7 @@ def test_cli_copy_end_to_end(tmp_path, monkeypatch, capsys):
     assert cli.main(["-c", str(path), "copy", "--state", str(state)]) == 0
     assert cli.main(["-c", str(path), "copy", "--state", str(state)]) == 0
     out = capsys.readouterr().out
-    assert "kopiert: 9" in out and "kopiert: 0" in out and len(imap.appended) == 9
+    assert "copied: 9" in out and "copied: 0" in out and len(imap.appended) == 9
 
 
 def test_message_ids_reads_existing_folder_in_chunks():
@@ -177,15 +177,15 @@ def test_progress_tty_overwrites_same_line():
 
     buf = io.StringIO()
     p = Progress(buf, tty=True, interval=0)
-    p.update("Liste 1/3")
-    p.update("Liste 2/3")
-    p.line("3 Mails, 0 neu  INBOX")
-    p.update("Liste 1/5")
+    p.update("Listing 1/3")
+    p.update("Listing 2/3")
+    p.line("3 mails, 0 new  INBOX")
+    p.update("Listing 1/5")
     p.close()
     out = buf.getvalue()
-    assert out == ("\r\x1b[KListe 1/3\r\x1b[KListe 2/3\r\x1b[K3 Mails, 0 neu  INBOX\n"
-                   "\r\x1b[KListe 1/5\n")
-    assert eta(10, 70, 5.0) == ", noch ~0:00:30" and eta(0, 10, 1) == ""
+    assert out == ("\r\x1b[KListing 1/3\r\x1b[KListing 2/3\r\x1b[K3 mails, 0 new  INBOX\n"
+                   "\r\x1b[KListing 1/5\n")
+    assert eta(10, 70, 5.0) == ", ~0:00:30 left" and eta(0, 10, 1) == ""
 
 
 def test_progress_non_tty_prints_rarely():
@@ -206,8 +206,8 @@ def test_copy_reports_progress_lines(tmp_path):
 
     prog = Silent()
     fullcopy.run(mailbox(), writer(FakeImap()), fullcopy.State(tmp_path / "s.db"), progress=prog)
-    assert any(line.startswith("      2 Mails,       2 neu  Posteingang →  INBOX") for line in prog.lines)
-    assert all("kopiert" in line for line in prog.lines if " neu " in line and "0 neu" not in line)
+    assert any(line.startswith("      2 mails,       2 new  Posteingang →  INBOX") for line in prog.lines)
+    assert all("copied" in line for line in prog.lines if " new " in line and "0 new" not in line)
 
 
 def test_listing_does_not_request_complex_message_id():
@@ -235,3 +235,10 @@ def test_generic_items_from_listing_are_still_copied(tmp_path):
     assert len(imap.store["INBOX"]) == 2 and stats.no_mail >= 1
     again = fullcopy.run(acc, writer(imap), fullcopy.State(tmp_path / "s.db"))
     assert again.copied == 0
+
+
+def test_exclude_accepts_german_and_english_archive_prefix(tmp_path):
+    for prefix in ("Archive:", "Archiv:", "archive:"):
+        stats = fullcopy.run(mailbox(), writer(FakeImap()), fullcopy.State(tmp_path / f"{prefix}.db"),
+                             exclude=[f"{prefix}Posteingang"], dry_run=True)
+        assert stats.found == 6, prefix  # 2 archive folders skipped, 3 mails less

@@ -118,7 +118,7 @@ class FakeImap:
 def test_mail_folders_primary_and_archive_skip_calendar():
     labels = [mf.label for mf in ews.mail_folders(account())]
     assert labels == ["Posteingang", "Posteingang/Projekte", "Gesendet",
-                      "Archiv:Posteingang", "Archiv:Posteingang/2019"]
+                      "Archive:Posteingang", "Archive:Posteingang/2019"]
 
 
 def test_folder_path_resolution():
@@ -146,7 +146,7 @@ def test_bench_with_writer_creates_nested_folder():
     assert res.items == 2 and res.errors == 0 and res.bytes > 0
     assert {"Archiv", "Archiv/Test"} <= imap.folders
     assert imap.appended[0] == ("Archiv/Test", ("\\Seen",))
-    assert "Hochrechnung" in res.report(30)
+    assert "Extrapolation" in res.report(30)
 
 
 def test_lmtp_deliver_uses_dovecot_user():
@@ -182,10 +182,10 @@ def test_target_table_status_and_duplicates():
     folders.append(ews.MailFolder("primary", ("a_b",), None, 2))
     lines = target_table(folders, "/", "Archiv", existing={"INBOX", "Archiv/Posteingang"})
     text = "\n".join(lines)
-    assert "Posteingang/Projekte" in text and "→  INBOX/Projekte  [neu]" in text
-    assert "→  INBOX  [vorhanden]" in text
-    assert "Archiv:Posteingang/2019" in text and "→  Archiv/Posteingang/2019  [neu]" in text
-    assert text.count("[neu, doppelt]") == 2  # "a/b" und "a_b" landen beide in "a_b"
+    assert "Posteingang/Projekte" in text and "→  INBOX/Projekte  [new]" in text
+    assert "→  INBOX  [exists]" in text
+    assert "Archive:Posteingang/2019" in text and "→  Archiv/Posteingang/2019  [new]" in text
+    assert text.count("[new, duplicate]") == 2  # "a/b" and "a_b" both end up in "a_b"
 
 
 def test_target_table_offline_has_no_status():
@@ -208,7 +208,7 @@ def test_cli_folders_target(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli.dovecot, "ImapWriter", lambda c, pw: real_writer(c, pw, client=imap))
     assert cli.main(["-c", str(cfg), "folders", "--target"]) == 0
     out = capsys.readouterr().out
-    assert "→  INBOX  [vorhanden]" in out and "Mails gesamt" in out
+    assert "→  INBOX  [exists]" in out and "mails in total" in out
 
 
 def test_cli_folders_target_needs_dovecot_section(tmp_path, capsys):
@@ -234,7 +234,7 @@ def test_cli_reports_rejected_ews_login(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli.ews, "connect", reject)
     assert cli.main(["-c", str(cfg), "folders"]) == 1
     err = capsys.readouterr().err
-    assert "EWS-Anmeldung abgelehnt" in err and "DOM\\u" in err and "NTLM" in err
+    assert "EWS login rejected" in err and "DOM\\u" in err and "NTLM" in err
 
 
 def test_bench_respects_limit_even_if_slicing_does_not():
@@ -265,9 +265,9 @@ def test_bench_recursive_rebuilds_structure_and_skips_non_mail():
                     recursive=True)
     assert res.items == 6  # 1 + 2 + 3, Kalender ausgelassen
     assert [(src, dest, n) for src, dest, n in res.folders] == [
-        ("(Startordner)", "T", 1), ("2019", "T/2019", 2), ("2019/Q1", "T/2019/Q1", 3)]
+        ("(start folder)", "T", 1), ("2019", "T/2019", 2), ("2019/Q1", "T/2019/Q1", 3)]
     assert {"T", "T/2019", "T/2019/Q1"} <= imap.folders
-    assert "Ordner: 3" in res.report(30, show_folders=True)
+    assert "Folders: 3" in res.report(30, show_folders=True)
 
 
 def test_bench_recursive_total_and_per_folder_limits():

@@ -1,79 +1,97 @@
 # exchange-dovecot-sync (exsync)
 
-Einweg-Sync von Exchange-Postfächern (Hauptpostfach **und** Archivpostfach) per EWS nach Dovecot,
-mit optionaler Sieve-Filterung neuer Posteingangs-Mails.
+One-way sync of Exchange mailboxes (primary mailbox **and** archive mailbox) via EWS to Dovecot,
+with optional Sieve filtering of new inbox mails.
 
-**Stand: Prototyp.** Er beantwortet drei Fragen, bevor der eigentliche Sync gebaut wird:
+**Status: prototype.** It currently answers three questions before the actual sync is built and
+already provides a resumable full copy:
 
-1. Kommt der EWS-Zugriff auf Haupt- und Archivpostfach durch? → `exsync folders`
-2. Wie schnell liefert EWS die Mails (Hochrechnung für den Erstabgleich)? → `exsync bench`
-3. Greift Sieve bei LMTP-Zustellung auf dem (entfernten) Dovecot 2.4? → `exsync sieve-test`
+1. Does EWS access to the primary and archive mailbox work? → `exsync folders`
+2. How fast does EWS deliver mails (extrapolation for the initial copy)? → `exsync bench`
+3. Does Sieve run on LMTP delivery to the (remote) Dovecot 2.4? → `exsync sieve-test`
 
-## Einrichtung
+## Setup
 
 ```sh
 uv sync
-cp config.example.toml config.toml   # anpassen; config.toml ist in .gitignore
-export EXSYNC_EWS_PASSWORD=...        # sonst wird abgefragt
-export EXSYNC_IMAP_PASSWORD=...
+cp config.example.toml config.toml   # adjust; config.toml is in .gitignore
+chmod 600 config.toml                # if you put passwords into it
 ```
 
-## Prototyp-Befehle
+## Prototype commands
 
 ```sh
-uv run exsync folders                                  # Ordner + Anzahl Mails, Archiv als "Archiv:…"
-uv run exsync bench Inbox -n 2000                      # nur EWS-Export messen
-uv run exsync bench "Archiv:Inbox" -n 2000 --write     # zusätzlich per IMAP APPEND nach Dovecot
-uv run exsync bench "Archiv:RRZE" -r --per-folder 50 --write   # mit Unterordnern
-uv run exsync sieve-test                               # Testmail per LMTP, danach Zielordner suchen
+uv run exsync folders                                   # folders + mail counts, archive as "Archive:…"
+uv run exsync folders --target                          # … plus Dovecot target folder and status
+uv run exsync bench Inbox -n 2000                       # measure EWS export only
+uv run exsync bench "Archive:Inbox" -n 2000 --write     # additionally IMAP APPEND to Dovecot
+uv run exsync bench "Archive:Projects" -r --per-folder 50 --write   # including subfolders
+uv run exsync sieve-test                                # test mail via LMTP, then find its folder
 ```
 
-`-n` begrenzt die Gesamtzahl geladener Mails (jeweils die neuesten). Mit `-r` werden auch die
-Unterordner (nur Mailordner) übertragen; `-n` gilt dann über alle Ordner zusammen, `--per-folder`
-begrenzt zusätzlich je Ordner. Die Ordner werden der Reihe nach abgearbeitet, ohne `--per-folder`
-kann der erste große Ordner das Limit also allein aufbrauchen.
+Use `-c PATH` (before the command) to select a configuration file; the default is `config.toml`
+in the current directory. Archive folders are addressed with the prefix `Archive:` (`Archiv:` is
+accepted as well).
 
-`bench --write` schreibt in den Dovecot-Ordner `exsync-bench` (änderbar mit `--target`), mit `-r`
-samt Unterordnerstruktur darunter; danach löschen. Mehrfache Läufe erzeugen Duplikate. Die
-Hochrechnung nimmt standardmäßig 30 GB an (`--total-gb`).
+`folders --target` shows the Dovecot folder for each Exchange folder and marks it as `exists` or
+`new`; `duplicate` means that several Exchange folders would end up in the same Dovecot folder
+(e.g. because a folder name contains the Dovecot hierarchy delimiter). `--offline` skips the
+connection to Dovecot.
 
-## Komplettkopie: `exsync copy`
+`bench`: `-n` caps the total number of fetched mails (the newest each). With `-r` subfolders (mail
+folders only) are included; `-n` then applies across all folders and `--per-folder` additionally
+per folder. Folders are processed one after another, so without `--per-folder` a large first
+folder can use up the whole limit. `bench --write` writes to the Dovecot folder `exsync-bench`
+(change with `--target`), with `-r` including the subfolder structure below it; delete it
+afterwards. Repeated runs create duplicates. The extrapolation assumes 30 GB by default
+(`--total-gb`).
+
+## Full copy: `exsync copy`
 
 ```sh
-uv run exsync -c config.toml copy --dry-run          # nur zählen, was kopiert würde
-uv run exsync -c config.toml copy                    # Haupt- und Archivpostfach komplett kopieren
-uv run exsync -c config.toml copy --exclude "Gelöschte Elemente" --exclude "Junk-E-Mail"
+uv run exsync copy --dry-run          # only count what would be copied
+uv run exsync copy                    # copy primary and archive mailbox completely
+uv run exsync copy --exclude "Deleted Items" --exclude "Junk Email"
 ```
 
-Kopiert alle Mailordner von Haupt- und Archivpostfach rekursiv nach Dovecot, mit derselben
-Ordnerzuordnung wie `folders --target` (Posteingang → `INBOX`, Archiv unter `Archiv/`).
-Kalender, Kontakte und Aufgaben werden ausgelassen.
+Copies all mail folders of the primary and the archive mailbox recursively to Dovecot, with the
+same folder mapping as `folders --target`: the inbox becomes `INBOX`, the archive mailbox goes
+below `Archiv/` (configurable via `archive_prefix`). Calendar items, contacts and tasks are
+skipped, also when they are stored in mail folders (e.g. deleted ones in "Deleted Items");
+meeting requests and responses are copied. `--no-archive` skips the archive mailbox,
+`--exclude` skips a folder including its subfolders (path as shown by `folders`, repeatable).
 
-**Abbruch und Fortsetzen:** Einfach denselben Befehl erneut aufrufen; übertragen werden nur noch
-fehlende Mails. Eine Mail gilt als vorhanden, wenn
+**Progress:** in a terminal a single line is updated in place (listing, comparing, copying with
+rate and estimated time left) and replaced by a summary line per folder. When the output is
+redirected, at most one progress line is written every 30 seconds.
 
-1. ihre EWS-ItemId in der Zustandsdatei steht (Standard
-   `~/.local/state/exsync/<postfach>__<dovecot-user>@<host>.sqlite3`, änderbar mit `--state`);
-   sie wird direkt nach jedem erfolgreichen Schreiben aktualisiert, oder
-2. ihre Message-ID schon im Zielordner liegt. Das greift auch ohne Zustandsdatei.
+**Interrupting and resuming:** just run the same command again; only missing mails are
+transferred. A mail counts as present if
 
-Pro Ordner holt exsync zuerst nur die Liste der Mails und lädt den Inhalt nur für fehlende Mails.
-Grenzen: Wird genau während des Schreibens einer Mail **ohne** Message-ID abgebrochen, kann diese
-eine Mail doppelt ankommen. Mehrere Mails mit gleicher Message-ID im selben Ordner werden nur einmal
-übertragen. Verschiebt man Mails in Exchange zwischen zwei Läufen, landen sie zusätzlich im neuen
-Zielordner (das ist kein Sync, Löschungen und Verschiebungen werden nicht nachgezogen).
+1. its EWS ItemId is in the state file (default
+   `~/.local/state/exsync/<mailbox>__<dovecot-user>@<host>.sqlite3`, change with `--state`),
+   which is updated right after every successful write, or
+2. its Message-ID is already in the target folder. This also works without a state file.
 
-## Passwörter
+For each folder exsync first fetches only the list of mails (1000 per request) and downloads the
+content only for missing mails.
 
-Reihenfolge: Umgebungsvariable (`EXSYNC_EWS_PASSWORD`, `EXSYNC_IMAP_PASSWORD`), dann `password` im
-jeweiligen Abschnitt der `config.toml`, sonst Abfrage. Wer Passwörter in die Datei schreibt, sollte
-sie mit `chmod 600 config.toml` schützen; exsync warnt, wenn sie für andere lesbar ist.
+Limitations: if the run is interrupted exactly while a mail **without** a Message-ID is being
+written, that one mail may arrive twice. Several mails with the same Message-ID in the same folder
+are transferred only once. This is not a sync: mails moved or deleted in Exchange between two runs
+are not moved or deleted in Dovecot (moved mails additionally appear in the new target folder).
 
-## Voraussetzungen auf Dovecot-Seite
+## Passwords
 
-- **IMAP:** Login als Benutzer oder per Master-User (`master_user` in der Konfiguration →
-  Login `benutzer*master`).
-- **LMTP über TCP** (für `sieve-test` und später für neue Posteingangs-Mails), Dovecot 2.4:
+Order: environment variable (`EXSYNC_EWS_PASSWORD`, `EXSYNC_IMAP_PASSWORD`), then `password` in the
+respective section of `config.toml`, otherwise an interactive prompt. If you store passwords in the
+file, protect it with `chmod 600 config.toml`; exsync warns if it is readable by others.
+
+## Requirements on the Dovecot side
+
+- **IMAP:** login as the user or via a master user (`master_user` in the configuration → login
+  `user*master`).
+- **LMTP over TCP** (for `sieve-test` and later for new inbox mails), Dovecot 2.4:
 
   ```
   service lmtp {
@@ -88,13 +106,15 @@ sie mit `chmod 600 config.toml` schützen; exsync warnt, wenn sie für andere le
   }
   ```
 
-  Den Port per Firewall nur für den Sync-Rechner freigeben, LMTP hat keine Authentifizierung.
+  Allow the port only for the sync host in the firewall; LMTP has no authentication.
 
-## Geplante Arbeitsweise des Syncs („Regel 2“)
+## Planned sync behaviour
 
-- Übertragen werden nur **Änderungen in Exchange** (`SyncFolderHierarchy`/`SyncFolderItems` mit
-  gespeichertem sync_state je Ordner), stündlich per systemd-Timer.
-- Lokale Änderungen in Dovecot (Sieve, Verschieben, Löschen) bleiben erhalten. Fehlende Mails werden
-  nicht wiederhergestellt; Status-Änderungen aus Exchange werden an der Mail nachgezogen, wo sie gerade liegt.
-- Hauptpostfach 1:1, Archivpostfach unter `Archiv/`. Nur Mailordner (`IPF.Note`), keine Kalender/Kontakte.
-- Neue Mails im Exchange-Posteingang gehen per LMTP (Sieve läuft), alles andere per IMAP APPEND.
+- Only **changes in Exchange** are transferred (`SyncFolderHierarchy`/`SyncFolderItems` with a
+  stored sync_state per folder), hourly via a systemd timer.
+- Local changes in Dovecot (Sieve, moving, deleting) are kept. Missing mails are not restored;
+  state changes from Exchange are applied to the mail wherever it currently is.
+- Primary mailbox 1:1, archive mailbox below `Archiv/`. Mail folders only (`IPF.Note`), no
+  calendars/contacts.
+- New mails in the Exchange inbox are delivered via LMTP (Sieve runs), everything else via IMAP
+  APPEND.

@@ -1,8 +1,4 @@
-"""Zugriff auf Exchange per EWS (exchangelib): Verbindung, Ordner, Flags.
-
-Verbindungsaufbau und Ordnerpfade sind aus dem todos-Projekt
-(src/todos/connectors/mail_ews.py) übernommen.
-"""
+"""Access to Exchange via EWS (exchangelib): connection, folders, flags."""
 
 from __future__ import annotations
 
@@ -13,20 +9,20 @@ from typing import Any
 
 from exsync.config import EwsConfig
 
-# MS-OXOFLAG: PidTagFlagStatus 0x1090 → 2 = markiert, 1 = erledigt
+# MS-OXOFLAG: PidTagFlagStatus 0x1090 → 2 = flagged, 1 = completed
 FLAGGED = 2
 # MS-OXOMSG: PidTagLastVerbExecuted 0x1081
-VERB_REPLY = (102, 103)  # Antworten, Allen antworten
+VERB_REPLY = (102, 103)  # reply, reply all
 VERB_FORWARD = 104
 ARCHIVE_PREFIXES = ("archiv", "archive", "online-archiv")
-# Ordnerklassen, die Mails enthalten (Kalender, Kontakte, Aufgaben werden ausgelassen)
+# Folder classes containing mail (calendars, contacts, tasks are skipped)
 MAIL_FOLDER_CLASSES = ("IPF.Note",)
 
 _registered = False
 
 
 def register_props() -> None:
-    """Erweiterte MAPI-Eigenschaften bei exchangelib registrieren (einmalig)."""
+    """Register extended MAPI properties with exchangelib (once)."""
     global _registered
     if _registered:
         return
@@ -43,7 +39,7 @@ def register_props() -> None:
     for name, cls in (("flag_status", FlagStatus), ("last_verb", LastVerbExecuted)):
         try:
             Message.register(name, cls)
-        except ValueError:  # bereits registriert
+        except ValueError:  # already registered
             pass
     _registered = True
 
@@ -68,7 +64,7 @@ def connect(cfg: EwsConfig, password: str):
 
 
 def folder(account, path: str):
-    """Ordner per Pfad. "Archiv:<pfad>" adressiert das Archivpostfach."""
+    """Folder by path. "Archive:<path>" (or "Archiv:<path>") addresses the archive mailbox."""
     archive = False
     prefix, sep, rest = path.partition(":")
     if sep and prefix.strip().lower() in ARCHIVE_PREFIXES:
@@ -88,19 +84,19 @@ def folder(account, path: str):
 
 @dataclass
 class MailFolder:
-    source: str  # "primary" oder "archive"
-    parts: tuple[str, ...]  # Pfad relativ zur Wurzel des jeweiligen Postfachs
+    source: str  # "primary" or "archive"
+    parts: tuple[str, ...]  # path relative to the root of the respective mailbox
     folder: Any
     total_count: int | None
 
     @property
     def label(self) -> str:
         path = "/".join(self.parts)
-        return f"Archiv:{path}" if self.source == "archive" else path
+        return f"Archive:{path}" if self.source == "archive" else path
 
 
 def mail_folders(account, include_archive: bool = True) -> Iterator[MailFolder]:
-    """Alle Mailordner von Haupt- und (optional) Archivpostfach."""
+    """All mail folders of the primary and (optionally) the archive mailbox."""
     roots = [("primary", account.msg_folder_root)]
     if include_archive:
         roots.append(("archive", account.archive_msg_folder_root))
@@ -125,13 +121,13 @@ def relative_parts(f, root) -> tuple[str, ...]:
 
 
 def is_mail_item(item) -> bool:
-    """Mail oder Besprechungsanfrage/-antwort/-absage? Kalendereinträge, Kontakte, Aufgaben
-    usw. (z.B. gelöscht in „Gelöschte Elemente“) sind es nicht und werden nicht kopiert."""
+    """Mail or meeting request/response/cancellation? Calendar items, contacts, tasks etc.
+    (e.g. deleted ones in "Deleted Items") are not and are not copied."""
     from exchangelib.items import Item, MeetingCancellation, MeetingRequest, MeetingResponse, Message
 
     if not isinstance(item, Item) or type(item) is Item:
-        # Testobjekte bzw. Typ unbekannt: exchangelib liefert generische Item-Objekte, wenn nur
-        # id/changekey abgefragt wurden. Nicht als „keine Mail“ werten, sondern später prüfen.
+        # Test objects or unknown type: exchangelib returns generic Item objects if only
+        # id/changekey were requested. Do not treat as "not a mail"; check again later.
         return True
     return isinstance(item, (Message, MeetingRequest, MeetingResponse, MeetingCancellation))
 
@@ -142,7 +138,7 @@ _KEYWORD_BAD = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
 def imap_flags(item) -> list[str]:
-    """Exchange-Status einer Mail → IMAP-Flags und -Keywords."""
+    """Exchange state of a mail → IMAP flags and keywords."""
     flags = []
     if getattr(item, "is_read", False):
         flags.append("\\Seen")
@@ -161,7 +157,7 @@ def imap_flags(item) -> list[str]:
 
 
 def category_keyword(category: str) -> str:
-    """Outlook-Kategorie → IMAP-Keyword (nur ASCII-Atom-Zeichen erlaubt)."""
+    """Outlook category → IMAP keyword (only ASCII atom characters allowed)."""
     ascii_ = (category.replace("ä", "ae").replace("ö", "oe").replace("ü", "ue").replace("ß", "ss")
               .replace("Ä", "Ae").replace("Ö", "Oe").replace("Ü", "Ue"))
     kw = _KEYWORD_BAD.sub("_", ascii_).strip("_")
