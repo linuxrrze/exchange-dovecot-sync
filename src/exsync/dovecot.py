@@ -9,13 +9,19 @@ from __future__ import annotations
 import imaplib
 import logging
 import smtplib
-from collections.abc import Sequence
+import time
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from email.parser import BytesHeaderParser
 
 from exsync.config import DovecotConfig
 
 log = logging.getLogger(__name__)
+
+# Connection lost (EOF, reset, timeout, TLS error). imapclient raises imaplib.IMAP4.abort for
+# EOF; socket and ssl errors are OSError subclasses. Server answers like NO/BAD are not retried.
+CONNECTION_ERRORS = (imaplib.IMAP4.abort, OSError)
+RETRY_DELAYS = (5, 15, 60)  # seconds to wait before each reconnect attempt
 
 
 def normalize_message_id(value) -> str | None:
@@ -45,25 +51,68 @@ def folder_name(source: str, parts: Sequence[str], delimiter: str, archive_prefi
 
 
 class ImapWriter:
-    def __init__(self, cfg: DovecotConfig, password: str, client=None):
-        if client is None:
-            import ssl as ssl_mod
+    """IMAP connection to Dovecot that reconnects automatically if the connection drops."""
 
-            from imapclient import IMAPClient
-
-            ctx = ssl_mod.create_default_context()
-            if not cfg.verify_tls:
-                ctx.check_hostname = False
-                ctx.verify_mode = ssl_mod.CERT_NONE
-            client = IMAPClient(cfg.imap_host, port=cfg.imap_port, ssl=cfg.ssl,
-                                ssl_context=ctx if cfg.ssl else None)
-            if not cfg.ssl:
-                client.starttls(ctx)
-            client.login(cfg.login, password)
-        self.client = client
+    def __init__(self, cfg: DovecotConfig, password: str, client=None,
+                 connect: Callable[[], object] | None = None):
         self.cfg = cfg
+        self._password = password
+        # `connect` is used for reconnecting; tests pass a client and optionally a factory
+        self._connect = connect or (self._open if client is None else None)
+        self.client = client if client is not None else self._connect()
         self._known: set[str] = set()
+        self.delays: Sequence[float] = RETRY_DELAYS
+        self.sleep = time.sleep
+        self.notify: Callable[[str], None] = log.warning
+        self.reconnects = 0
+        self._broken = False
         self.delimiter = self._delimiter()
+
+    def _open(self):
+        import ssl as ssl_mod
+
+        from imapclient import IMAPClient
+
+        cfg = self.cfg
+        ctx = ssl_mod.create_default_context()
+        if not cfg.verify_tls:
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl_mod.CERT_NONE
+        client = IMAPClient(cfg.imap_host, port=cfg.imap_port, ssl=cfg.ssl,
+                            ssl_context=ctx if cfg.ssl else None, timeout=300)
+        if not cfg.ssl:
+            client.starttls(ctx)
+        client.login(cfg.login, self._password)
+        return client
+
+    def _reconnect(self) -> None:
+        if self._connect is None:
+            raise RuntimeError("IMAP connection lost and no way to reconnect")
+        try:
+            self.client.logout()
+        except Exception as exc:  # noqa: BLE001 – the old connection is dead anyway
+            log.debug("Logout of the lost connection failed: %s", exc)
+        self.client = self._connect()
+        self.reconnects += 1
+        self._broken = False
+
+    def _retry(self, what: str, fn: Callable[[bool], object]):
+        """Run fn(retried); on a lost connection reconnect and try again (len(delays) times)."""
+        retried = False
+        for attempt in range(len(self.delays) + 1):
+            try:
+                if self._broken:
+                    self._reconnect()
+                    retried = True
+                return fn(retried)
+            except CONNECTION_ERRORS as exc:
+                self._broken = True
+                if attempt == len(self.delays):
+                    raise
+                delay = self.delays[attempt]
+                self.notify(f"  IMAP connection lost during {what} ({exc or type(exc).__name__}); "
+                            f"reconnecting in {delay:g} s (attempt {attempt + 1}/{len(self.delays)})")
+                self.sleep(delay)
 
     def _delimiter(self) -> str:
         for _flags, delim, _name in self.client.list_folders(pattern="INBOX"):
@@ -83,12 +132,32 @@ class ImapWriter:
                     self.client.create_folder(sub)
         self._known.add(name)
 
-    def append(self, folder: str, mime: bytes, flags: Sequence[str], msg_time: datetime | None) -> None:
-        self.ensure_folder(folder)
-        self.client.append(folder, mime, flags=tuple(flags), msg_time=msg_time)
+    def append(self, folder: str, mime: bytes, flags: Sequence[str], msg_time: datetime | None,
+               message_id: str | None = None) -> bool:
+        """IMAP APPEND with reconnect. Returns False if a retry found the mail already there."""
+
+        def do(retried: bool) -> bool:
+            # The lost connection may have dropped only the server's reply: check first, so that
+            # the retry does not create a duplicate (only possible with a Message-ID).
+            if retried and message_id and self._contains(folder, message_id):
+                return False
+            self.ensure_folder(folder)
+            self.client.append(folder, mime, flags=tuple(flags), msg_time=msg_time)
+            return True
+
+        return self._retry(f"APPEND to {folder}", do)
+
+    def _contains(self, folder: str, message_id: str) -> bool:
+        if not self.client.folder_exists(folder):
+            return False
+        self.client.select_folder(folder, readonly=True)
+        return bool(self.client.search(["HEADER", "Message-ID", message_id]))
 
     def message_ids(self, folder: str) -> set[str]:
         """Normalized Message-IDs of all mails in a folder (empty if it does not exist)."""
+        return self._retry(f"reading {folder}", lambda _retried: self._message_ids(folder))
+
+    def _message_ids(self, folder: str) -> set[str]:
         if not self.client.folder_exists(folder):
             return set()
         info = self.client.select_folder(folder, readonly=True)
@@ -108,7 +177,7 @@ class ImapWriter:
         return ids
 
     def existing_folders(self) -> set[str]:
-        return {name for _flags, _delim, name in self.client.list_folders()}
+        return self._retry("LIST", lambda _retried: {name for _f, _d, name in self.client.list_folders()})
 
     def find_message_id(self, message_id: str) -> list[str]:
         """Folders containing a mail with this Message-ID."""

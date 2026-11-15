@@ -73,6 +73,11 @@ transferred. A mail counts as present if
    which is updated right after every successful write, or
 2. its Message-ID is already in the target folder. This also works without a state file.
 
+**Lost IMAP connection:** exsync reconnects automatically (after 5, 15 and 60 s) and writes the
+mail again; if the mail has a Message-ID it first checks whether the interrupted APPEND did arrive,
+so no duplicate is created. If a mail still cannot be written it is counted as an error and
+retried on the next run; after three such mails in a row (Dovecot unreachable) the copy stops.
+
 For each folder exsync first fetches only the list of mails (1000 per request) and downloads the
 content only for missing mails.
 

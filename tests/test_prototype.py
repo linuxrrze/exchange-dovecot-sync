@@ -91,8 +91,12 @@ class FakeImap:
         return {b"EXISTS": len(self.store.get(name, []))}
 
     def search(self, criteria):
+        mails = self.store.get(self.selected, [])
+        if criteria[:2] == ["HEADER", "Message-ID"]:
+            needle = f"Message-ID: {criteria[2]}".encode()
+            return [i for i, m in enumerate(mails, start=1) if needle in m]
         assert criteria == ["ALL"]
-        return list(range(1, len(self.store.get(self.selected, [])) + 1))
+        return list(range(1, len(mails) + 1))
 
     def fetch(self, messages, parts):
         # wie imapclient: nur Listen von UIDs (bzw. einzelne Zahlen), keine Bereiche wie "1:*"

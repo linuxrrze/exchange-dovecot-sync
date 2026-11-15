@@ -1,3 +1,4 @@
+import imaplib
 import os
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -242,3 +243,62 @@ def test_exclude_accepts_german_and_english_archive_prefix(tmp_path):
         stats = fullcopy.run(mailbox(), writer(FakeImap()), fullcopy.State(tmp_path / f"{prefix}.db"),
                              exclude=[f"{prefix}Posteingang"], dry_run=True)
         assert stats.found == 6, prefix  # 2 archive folders skipped, 3 mails less
+
+
+# ------------------------------------------------------------ lost IMAP connection
+
+
+class DroppingImap(FakeImap):
+    """Drops the connection on given APPEND calls, before or after storing the mail."""
+
+    def __init__(self, drop_on=(), store_before_drop=False):
+        super().__init__()
+        self.drop_on, self.store_before_drop, self.calls, self.logins = set(drop_on), store_before_drop, 0, 1
+
+    def append(self, folder, mime, flags=(), msg_time=None):
+        self.calls += 1
+        if self.calls in self.drop_on:
+            if self.store_before_drop:
+                super().append(folder, mime, flags, msg_time)
+            raise imaplib.IMAP4.abort("socket error: EOF")
+        super().append(folder, mime, flags, msg_time)
+
+
+def reconnecting_writer(imap):
+    def connect():
+        imap.logins += 1
+        return imap
+
+    w = dovecot.ImapWriter(DovecotConfig(user="u"), "pw", client=imap, connect=connect)
+    w.sleep, w.messages = (lambda s: None), []
+    w.notify = w.messages.append
+    return w
+
+
+@pytest.mark.parametrize("stored", [False, True])
+def test_append_reconnects_without_duplicates(stored):
+    imap = DroppingImap(drop_on={2}, store_before_drop=stored)
+    w = reconnecting_writer(imap)
+    for n in (1, 2, 3):
+        w.append("INBOX", mail(n).mime_content, [], None, message_id=f"<m{n}@x>")
+    assert len(imap.store["INBOX"]) == 3 and imap.logins == 2 and w.reconnects == 1
+    assert "IMAP connection lost during APPEND to INBOX" in w.messages[0]
+
+
+def test_copy_survives_dropped_connection(tmp_path):
+    imap = DroppingImap(drop_on={4}, store_before_drop=True)
+    stats = fullcopy.run(mailbox(), reconnecting_writer(imap), fullcopy.State(tmp_path / "s.db"))
+    assert stats.errors == 0 and stats.copied + stats.skipped == 9 and len(imap.appended) == 9
+
+
+def test_copy_gives_up_on_one_mail_then_aborts_if_dovecot_stays_down(tmp_path):
+    # mail 1 fails 4 times (1 + 3 retries) → error, continue; afterwards everything fails → abort
+    imap = DroppingImap(drop_on={1, 2, 3, 4})
+    w = reconnecting_writer(imap)
+    stats = fullcopy.run(mailbox(), w, fullcopy.State(tmp_path / "s.db"))
+    assert stats.errors == 1 and stats.copied == 8
+
+    down = DroppingImap(drop_on=range(1, 1000))
+    with pytest.raises(imaplib.IMAP4.abort):
+        fullcopy.run(mailbox(), reconnecting_writer(down), fullcopy.State(tmp_path / "t.db"))
+    assert down.calls == 3 * 4 and down.appended == []

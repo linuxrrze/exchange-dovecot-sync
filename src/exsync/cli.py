@@ -173,15 +173,23 @@ def cmd_copy(cfg: config.Config, args) -> int:
     writer = dovecot.ImapWriter(cfg.dovecot, cfg.dovecot.get_password())
     state = fullcopy.State(state_path)
     print(f"State file: {state_path}", flush=True)
+    progress = Progress(sys.stdout)
+    writer.notify = progress.line
     stats = None
+    resume = "Running the same command again resumes and only transfers missing mails."
     try:
         stats = fullcopy.run(account, writer, state, include_archive=not args.no_archive,
                              exclude=args.exclude, dry_run=args.dry_run, batch=args.batch,
-                             progress=Progress(sys.stdout))
+                             progress=progress)
     except KeyboardInterrupt:
-        print("\nInterrupted. Running the same command again resumes and only transfers missing mails.",
-              file=sys.stderr)
+        print(f"\nInterrupted. {resume}", file=sys.stderr)
         return 130
+    except dovecot.CONNECTION_ERRORS as exc:
+        if args.verbose:
+            raise
+        print(f"\nAborted: IMAP connection to {cfg.dovecot.imap_host} lost and reconnecting failed "
+              f"({exc or type(exc).__name__}). Check the Dovecot log. {resume}", file=sys.stderr)
+        return 1
     finally:
         writer.close()
         state.close()

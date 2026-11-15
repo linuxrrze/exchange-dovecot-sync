@@ -29,6 +29,9 @@ from exsync.progress import Progress, Silent, eta
 # shortcut and returns generic Item objects without a type.
 LIST_FIELDS = ("id", "changekey", "datetime_received")
 COPY_FIELDS = (*bench.FIELDS, "message_id")
+# Abort if this many mails in a row cannot be written even after reconnecting (Dovecot down).
+# Fewer failures are counted as errors and the mail is retried on the next run.
+MAX_CONSECUTIVE_FAILURES = 3
 
 
 class State:
@@ -72,6 +75,7 @@ class CopyStats:
     no_mail: int = 0  # calendar items, contacts, tasks … in mail folders (not copied)
     bytes: int = 0
     seconds: float = 0.0
+    failure_streak: int = 0
 
     def summary(self, dry_run: bool = False) -> str:
         verb = "to copy" if dry_run else "copied"
@@ -177,11 +181,26 @@ def _copy_folder(account, mf, dest, writer, state, done, stats, dry_run, batch, 
                 stats.skipped += 1
                 dup += 1
             else:
-                writer.append(dest, mime, ews.imap_flags(item), item.datetime_received)
-                stats.copied += 1
-                stats.bytes += len(mime)
-                copied += 1
-                size += len(mime)
+                try:
+                    added = writer.append(dest, mime, ews.imap_flags(item), item.datetime_received,
+                                          message_id=mid)
+                except dovecot.CONNECTION_ERRORS as exc:
+                    stats.errors += 1
+                    stats.failure_streak += 1
+                    progress.line(f"  error writing {mid or src.id} ({len(mime) / 1e6:.1f} MB) to "
+                                  f"{dest}: {exc or type(exc).__name__}; will be retried on the next run")
+                    if stats.failure_streak >= MAX_CONSECUTIVE_FAILURES:
+                        raise
+                    continue
+                stats.failure_streak = 0
+                if added:
+                    stats.copied += 1
+                    stats.bytes += len(mime)
+                    copied += 1
+                    size += len(mime)
+                else:  # arrived before the connection dropped
+                    stats.skipped += 1
+                    dup += 1
                 if mid:
                     present.add(mid)
             state.mark(src.id, dest, mid)
