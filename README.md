@@ -32,6 +32,23 @@ docker run --rm -it -v "$PWD/exsync-data:/data" \
 
 The container runs as UID 1000; a bind-mounted directory must be writable for it.
 
+#### Podman
+
+The image works with Podman as well. With rootless Podman, UID 1000 in the container maps to an
+unprivileged subordinate UID on the host, which cannot write to your directory. Map the container
+user to your own host user instead (`:Z` relabels the directory for SELinux, e.g. on Fedora/RHEL):
+
+```sh
+podman run --rm -it --userns=keep-id:uid=1000,gid=1000 \
+  -v "$PWD/exsync-data:/data:Z" \
+  -e EXSYNC_EWS_PASSWORD -e EXSYNC_IMAP_PASSWORD \
+  ghcr.io/linuxrrze/exchange-dovecot-sync copy --dry-run
+```
+
+Alternatively `-v "$PWD/exsync-data:/data:U,Z"` lets Podman chown the directory to the container
+user (the files then belong to a subordinate UID on the host). `podman build .` builds the image
+locally.
+
 ## Prototype commands
 
 ```sh
