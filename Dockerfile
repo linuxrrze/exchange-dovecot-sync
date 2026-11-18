@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # --- build stage: resolve the locked dependencies into a venv ---------------------------
-FROM python:3.12-slim AS build
+FROM python:3.15-slim AS build
 COPY --from=ghcr.io/astral-sh/uv:0.12.15 /uv /bin/uv
 
 ENV UV_COMPILE_BYTECODE=1 \
@@ -22,7 +22,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-editable
 
 # --- runtime stage ----------------------------------------------------------------------
-FROM python:3.12-slim
+FROM python:3.15-slim
 
 # Pull in Debian security fixes released since the base image was built.
 RUN apt-get update \
