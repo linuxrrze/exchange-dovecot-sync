@@ -24,6 +24,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # --- runtime stage ----------------------------------------------------------------------
 FROM python:3.12-slim
 
+# Pull in Debian security fixes released since the base image was built.
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends \
+ && rm -rf /var/lib/apt/lists/*
+
 RUN useradd --create-home --uid 1000 exsync \
  && mkdir -p /data/state \
  && chown -R exsync:exsync /data
