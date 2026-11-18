@@ -18,6 +18,20 @@ cp config.example.toml config.toml   # adjust; config.toml is in .gitignore
 chmod 600 config.toml                # if you put passwords into it
 ```
 
+### Docker
+
+CI publishes an image to `ghcr.io/linuxrrze/exchange-dovecot-sync` (`latest` = `main`, plus
+version tags for `v*` git tags). The working directory is `/data`: put `config.toml` there and
+keep the volume, it also holds the state files (`/data/state/exsync/`).
+
+```sh
+docker run --rm -it -v "$PWD/exsync-data:/data" \
+  -e EXSYNC_EWS_PASSWORD -e EXSYNC_IMAP_PASSWORD \
+  ghcr.io/linuxrrze/exchange-dovecot-sync copy --dry-run
+```
+
+The container runs as UID 1000; a bind-mounted directory must be writable for it.
+
 ## Prototype commands
 
 ```sh
