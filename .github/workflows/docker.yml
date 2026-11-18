@@ -74,7 +74,10 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Smoke test
-        run: docker run --rm exsync:ci --help
+        run: |
+          docker run --rm exsync:ci --help
+          # pip must not be in the image (see Dockerfile)
+          ! docker run --rm --entrypoint python exsync:ci -c "import pip"
 
       # Fails the job (nothing is pushed) on CRITICAL/HIGH vulnerabilities that have a fix.
       - name: Trivy vulnerability scan

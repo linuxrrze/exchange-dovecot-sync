@@ -29,6 +29,11 @@ RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 
+# The base image ships a system-wide pip that exsync never uses (its venv has none);
+# remove it so its vulnerabilities don't end up in the image.
+RUN rm -rf /usr/local/bin/pip* /usr/local/lib/python3.12/site-packages/pip \
+           /usr/local/lib/python3.12/site-packages/pip-*.dist-info
+
 RUN useradd --create-home --uid 1000 exsync \
  && mkdir -p /data/state \
  && chown -R exsync:exsync /data
